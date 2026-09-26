@@ -1,0 +1,77 @@
+# PetLibro feeder: reload the integration when it dies at boot. Paste as a new automation (Edit in YAML).
+# Substitute __PETLIBRO_ENTRY_ID__ (Settings -> Devices & services -> PetLibro -> the entry's '...' menu shows it,
+# or the URL of the entry page), __NOTIFY_ENTITY__ and __HA_URL__.
+id: petlibro_self_heal
+alias: 'PetLibro: reload the integration when it dies at boot'
+description: 'SELF-HEAL. The jjjonesjr33/petlibro component raises a plain setup failure (not ConfigEntryNotReady)
+  when it can''t resolve api.us.petlibro.com, so a boot-time DNS race pins the config entry at ''setup_error'',
+  which HA NEVER retries. On the original install it sat dead 6.5 h after an unclean restart while every
+  other integration recovered, and feed_the_cat aborted at its offline guard. A reload is all the recovery
+  it needs. DETECTION: ''unavailable'' is the INTEGRATION-dead signal; a feeder that is merely offline
+  while the integration is loaded reads ''off'' instead. Don''t widen this to ''not on'', or a real device
+  dropout triggers pointless reloads. Two triggers, because a state trigger may not fire for an entity
+  that is ALREADY unavailable when HA starts, which is exactly this case: the /15 sweep is the one that
+  catches a bad boot. TUNABLES: sustain 00:10:00 and sweep floor 600 (s) clear both an HA restart and
+  the 1-5 min first data pull; cooldown 3600 (s) caps it at one reload an hour so a real PetLibro cloud
+  outage can''t become a reload/notify loop; settle delay 00:04:00 covers two ~128 s poll cycles before
+  judging the outcome.'
+triggers:
+- trigger: state
+  entity_id: binary_sensor.granary_smart_feeder_wi_fi
+  to: unavailable
+  for: 00:10:00
+  id: sustained
+- trigger: time_pattern
+  minutes: /15
+  id: sweep
+conditions:
+- condition: template
+  value_template: '{{ states(''binary_sensor.granary_smart_feeder_wi_fi'') == ''unavailable'' }}'
+- condition: template
+  value_template: '{{ states.binary_sensor.granary_smart_feeder_wi_fi is not none and (now() - states.binary_sensor.granary_smart_feeder_wi_fi.last_changed).total_seconds()
+    > 600 }}'
+- condition: template
+  value_template: '{{ this.attributes.last_triggered is none or (now() - this.attributes.last_triggered).total_seconds()
+    > 3600 }}'
+actions:
+- alias: Reload the stuck config entry
+  action: homeassistant.reload_config_entry
+  data:
+    entry_id: __PETLIBRO_ENTRY_ID__
+- alias: Let two poll cycles land before judging it
+  delay: 00:04:00
+- alias: Report the outcome
+  if:
+  - condition: state
+    entity_id: binary_sensor.granary_smart_feeder_wi_fi
+    state: 'on'
+  then:
+  - action: ntfy.publish
+    target:
+      entity_id: __NOTIFY_ENTITY__
+    data:
+      title: PetLibro recovered
+      message: 'The integration was dead (''setup_error'' after a DNS race) and a reload fixed it. Feeder
+        is back: signal {{ states(''sensor.granary_smart_feeder_wi_fi_signal_strength'') }} dBm, {{ states(''sensor.granary_smart_feeder_today_s_feeding_times'')
+        }} feeds today. No action needed.'
+      tags:
+      - cat
+      - arrows_counterclockwise
+      priority: 2
+  else:
+  - action: ntfy.publish
+    target:
+      entity_id: __NOTIFY_ENTITY__
+    data:
+      title: PetLibro STILL down after reload
+      message: Reloaded the config entry and the feeder is still not reporting (wi-fi sensor = '{{ states('binary_sensor.granary_smart_feeder_wi_fi')
+        }}'). A reload is not going to fix this - check the PetLibro cloud/app and the feeder's
+        WiFi. MANUAL FEEDING IS UNAVAILABLE; the feeder's own schedule is cloud-side and
+        should still be running. Retrying in 1 h.
+      tags:
+      - cat
+      - warning
+      priority: 4
+      click: __HA_URL__/config/integrations/integration/petlibro
+mode: single
+max_exceeded: silent

@@ -1,0 +1,95 @@
+# PetLibro feeder: script.feed_the_cat. Settings -> Automations & scenes -> Scripts -> Create -> Edit in YAML,
+# saved with the script ID feed_the_cat. Substitute __NOTIFY_ENTITY__ (an ntfy notify entity) and __HA_URL__.
+# The granary_smart_feeder_* entity IDs are what jjjonesjr33/petlibro creates for a feeder named
+# 'Granary Smart Feeder'. If yours is named differently, replace that prefix throughout.
+alias: Feed the cat
+description: 'Sets the manual-feed portion, then dispenses. Default 2 portions (2/12 cup, about 40 mL).
+  Exposed to Google Assistant, where a script shows up as a scene: ''Hey Google, activate Feed the cat''.
+  Step 1 fails LOUDLY: a bare condition would stop silently and still report success, so a dead integration
+  would look identical to a successful feed. Steps 3-5 wait for the portion select to read back the requested
+  option and refuse to press if it doesn''t, because a portion that never took still dispenses, at the
+  wrong amount. This can only ever withhold food, never over-dispense. select.select_option updates HA''s
+  state OPTIMISTICALLY, so the confirm-wait returns instantly and is NOT a substitute for the 3 s cloud
+  round-trip: both are kept, in that order.'
+icon: mdi:cat
+mode: single
+fields:
+  portions:
+    name: Portions
+    description: Number of 1/12-cup portions (1-48). Default 2.
+    required: false
+    default: 2
+    example: 2
+    selector:
+      number:
+        min: 1
+        max: 48
+        mode: box
+sequence:
+- alias: Fail LOUDLY if the feeder is not reachable
+  if:
+  - condition: not
+    conditions:
+    - condition: state
+      entity_id: binary_sensor.granary_smart_feeder_wi_fi
+      state: 'on'
+  then:
+  - action: ntfy.publish
+    target:
+      entity_id: __NOTIFY_ENTITY__
+    data:
+      title: Feed the cat FAILED - no food dispensed
+      message: '{% set s = states(''binary_sensor.granary_smart_feeder_wi_fi'') %}{% if s == ''unavailable''
+        %}The PetLibro INTEGRATION is dead (setup_error, usually a boot-time DNS race). The self-heal
+        automation reloads it within 15 min - try again after that.{% else %}The FEEDER itself is offline
+        (wi-fi sensor reads ''{{ s }}''). Check its power and its WiFi.{% endif %} The
+        feeder''s own schedule is cloud-side and is NOT affected - {{ states(''sensor.granary_smart_feeder_today_s_feeding_times'')
+        }} feeds so far today.'
+      tags:
+      - cat
+      - warning
+      priority: 4
+      click: __HA_URL__/config/integrations/integration/petlibro
+  - stop: Feeder not reachable - NO FOOD DISPENSED
+    error: true
+- alias: Set the portion size
+  action: select.select_option
+  target:
+    entity_id: select.granary_smart_feeder_manual_feed_quantity
+  data:
+    option: '{{ state_attr(''select.granary_smart_feeder_manual_feed_quantity'',''options'')[ [[portions
+      | default(2) | int(2), 1] | max, 48] | min - 1 ] }}'
+- alias: Let the portion round-trip to the cloud (KEEP - the check below is optimistic)
+  delay:
+    seconds: 3
+- alias: Wait for the portion to ACTUALLY take (was a blind 3 s delay)
+  wait_template: '{% set o = state_attr(''select.granary_smart_feeder_manual_feed_quantity'',''options'')
+    %}{% set i = [[portions | default(2) | int(2), 1] | max, 48] | min - 1 %}{{ o is not none and o |
+    length > i and states(''select.granary_smart_feeder_manual_feed_quantity'') == o[i] }}'
+  timeout: 00:00:20
+  continue_on_timeout: true
+- alias: Refuse to dispense an unconfirmed portion
+  if:
+  - condition: template
+    value_template: '{{ not wait.completed }}'
+  then:
+  - action: ntfy.publish
+    target:
+      entity_id: __NOTIFY_ENTITY__
+    data:
+      title: Feed the cat ABORTED - portion did not take
+      message: Asked for {{ portions | default(2) | int(2) }} portion(s) but select.granary_smart_feeder_manual_feed_quantity
+        still reads '{{ states('select.granary_smart_feeder_manual_feed_quantity') }}' after 20 s, so
+        the feed button was NOT pressed - dispensing now would have given the wrong amount. Usually means
+        the integration was just reloaded and has not settled (it logs 'manual_feed_quantity is None,
+        setting default to 1'). Wait a minute and run it again.
+      tags:
+      - cat
+      - warning
+      priority: 4
+  - stop: Portion not confirmed - NO FOOD DISPENSED
+    error: true
+- alias: Dispense
+  action: button.press
+  target:
+    entity_id: button.granary_smart_feeder_manual_feed
