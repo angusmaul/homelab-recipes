@@ -2,7 +2,7 @@
 
 Home Assistant automations that run a Bestway AirJet spa's heater only on solar power the house
 would otherwise export, after the home battery (a Tesla Powerwall) has had first call, with a
-15:30 comfort top-up and a filtration schedule. Written up on Medium (link to follow).
+15:30 comfort top-up and a filtration schedule. Written up on Medium: [A Spring Scorcher, a Powerwall, and a Spa That Only Heats on Spare Sunshine](https://geekconsulting.medium.com/a-spring-scorcher-a-powerwall-and-a-spa-that-only-heats-on-spare-sunshine-c2c1dc44efc1).
 
 ## Status
 

@@ -12,7 +12,7 @@ trusting a success response.
 
 | Folder | What it does |
 |---|---|
-| [spa-solar-heating](spa-solar-heating/) | Heat a Bestway spa in Home Assistant only on spare solar, with a Tesla Powerwall getting first call |
+| [spa-solar-heating](spa-solar-heating/) | Heat a Bestway spa in Home Assistant only on spare solar, with a Tesla Powerwall getting first call. [Article](https://geekconsulting.medium.com/a-spring-scorcher-a-powerwall-and-a-spa-that-only-heats-on-spare-sunshine-c2c1dc44efc1) |
 
 Placeholders look like `__UPPER_SNAKE__`; `grep -o "__[A-Z_]*__"` finds any left.
 
