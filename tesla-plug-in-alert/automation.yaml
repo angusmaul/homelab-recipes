@@ -1,0 +1,49 @@
+# Tesla plug-in alert: the automation. Paste into Settings -> Automations -> Create -> Edit in YAML,
+# after creating the opportunity sensor (opportunity_sensor.yaml) and substituting:
+#   __NOTIFY_ENTITY__  an ntfy notify entity (ntfy.publish gives the priority/tags/click used here)
+#   __SOLAR_POWER__    solar production (kW on Tessie)      __BATTERY_SOC__  home battery charge, %
+#   __CAR_BATTERY__    the car's battery level, %           __AMBER_GENERAL__ Amber general price, $/kWh
+#   __HA_URL__         a URL for your HA that works from the phone off the LAN (the push's tap-through)
+id: tesla_plug_in_alert
+alias: 'Tesla: plug-in opportunity alert'
+description: 'Push when binary_sensor.tesla_plug_in_opportunity (see opportunity_sensor.yaml: driver home,
+  car unplugged, and either spare solar with the home battery nearly full or a cheap grid price) holds
+  ON for 10 min. Reminders every 2 h while it stays on. The reminder path requires the sensor on >= 10
+  min so it can never pre-empt the first sustained alert: without that, a reminder tick at 9.5 min plus
+  the sustained trigger 30 s later pushes twice. Resets when plugged in or when conditions drop. TUNABLES:
+  thresholds live in the sensor''s template; sustain 00:10:00 and reminder floor 600 (s) here; throttle
+  7200 (s).'
+triggers:
+- trigger: state
+  entity_id: binary_sensor.tesla_plug_in_opportunity
+  to: 'on'
+  for: 00:10:00
+  id: sustained
+- trigger: time_pattern
+  minutes: /15
+  id: reminder
+conditions:
+- condition: state
+  entity_id: binary_sensor.tesla_plug_in_opportunity
+  state: 'on'
+- condition: template
+  value_template: '{{ trigger.id == ''sustained'' or ( (now() - states.binary_sensor.tesla_plug_in_opportunity.last_changed).total_seconds()
+    > 600 and (this.attributes.last_triggered is none or (now() - this.attributes.last_triggered).total_seconds()
+    > 7200) ) }}'
+actions:
+- action: ntfy.publish
+  target:
+    entity_id: __NOTIFY_ENTITY__
+  data:
+    title: Plug in the Tesla ⚡
+    message: '{% set p = states(''__AMBER_GENERAL__'') %}{% if p not in [''unknown'',''unavailable'']
+      %}Amber {{ (p|float * 100)|round(1) }}c/kWh · {% endif %}solar {{ states(''__SOLAR_POWER__'')|float(0)|round(1)
+      }} kW · Powerwall {{ states(''__BATTERY_SOC__'')|float(0)|round(0) }}%
+      · car at {{ states(''__CAR_BATTERY__'') }}%'
+    tags:
+    - zap
+    - electric_plug
+    priority: 4
+    click: __HA_URL__/energy
+mode: single
+max_exceeded: silent

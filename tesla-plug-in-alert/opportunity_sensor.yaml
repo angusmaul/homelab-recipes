@@ -1,0 +1,35 @@
+# Tesla plug-in alert: the opportunity sensor, as YAML for configuration.yaml (or a package).
+#
+# ⚠️ On the original install this is a UI template helper (Settings -> Devices & services -> Helpers ->
+# Template -> Binary sensor) named "Tesla plug-in opportunity", so its entity ID is
+# binary_sensor.tesla_plug_in_opportunity. This YAML is written from the documented logic, not exported,
+# so treat it as reviewed rather than run. The UI route is simpler: paste the `state` template below.
+#
+# Substitute:
+#   __PERSON__          the driver's person entity                 e.g. person.alex
+#   __CHARGE_CABLE__    the car's charge-cable sensor (on = plugged in; Tessie provides one)
+#   __SOLAR_POWER__     solar production                           Tessie reports kW, not W
+#   __BATTERY_SOC__     home battery charge, %
+#   __AMBER_GENERAL__   Amber general (import) price, $/kWh
+#
+# ON when ALL of:
+#   1. the driver is home (see README: presence must come from WiFi, not the phone's GPS)
+#   2. the car is unplugged
+#   3. EITHER spare solar (solar > 2 kW AND the home battery > 90 %, so the battery has had first call)
+#      OR a cheap grid price (< $0.10/kWh)
+# The float(999) default keeps the price branch inert if Amber is unavailable, rather than
+# reading "0 c/kWh = cheap".
+
+template:
+  - binary_sensor:
+      - name: Tesla plug-in opportunity
+        unique_id: tesla_plug_in_opportunity
+        # tune: solar 2 (kW), home battery 90 (%), price 0.10 ($/kWh)
+        state: >
+          {{ is_state('__PERSON__', 'home')
+             and is_state('__CHARGE_CABLE__', 'off')
+             and (
+               (states('__SOLAR_POWER__') | float(0) > 2
+                and states('__BATTERY_SOC__') | float(0) > 90)
+               or states('__AMBER_GENERAL__') | float(999) < 0.10
+             ) }}
