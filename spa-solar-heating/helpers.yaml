@@ -1,0 +1,112 @@
+# Helpers the spa automations depend on, as YAML for configuration.yaml (or a package).
+#
+# ⚠️ On the original install these were created in the UI (Settings → Devices & services → Helpers),
+# with the same entity IDs. This file is the YAML equivalent, written for sharing from the documented
+# design; it has NOT itself been loaded as YAML on that install. Either route works — keep the IDs.
+#
+# Substitute before use:
+#   __GRID_POWER__       grid power, + import / - export          e.g. sensor.<site>_grid_power    (Tessie)
+#   __BATTERY_POWER__    battery power, + discharging / - charging e.g. sensor.<site>_battery_power (Tessie)
+#   __BATTERY_SOC__      battery state of charge, %               e.g. sensor.<site>_percentage_charged
+#   __AMBER_GENERAL__    Amber general (import) price             e.g. sensor.<site>_general_price
+#   __AMBER_FEED_IN__    Amber feed-in price                      e.g. sensor.<site>_feed_in_price
+#
+# 🔴 CHECK THE SIGNS AND UNITS ON YOUR INSTALL before trusting the surplus sensor. See README.
+# 🔴 Take grid and battery from the SAME source (one poll). Mixing a local meter with a cloud
+#    battery reading gave a -8,721 W "surplus" from sampling skew on a house whose load swings kW
+#    minute to minute.
+
+# No `initial:` anywhere — with `initial:`, HA resets the value on every restart. That means each
+# number starts at its `min` the first time: set them once from the dashboard. Values used:
+# target 33 °C, floor 31 °C, start 2400 W, stop 300 W, battery 95 %, filter 09:00-16:00.
+# The min/max/step ranges are suggestions, not what the original install used.
+input_boolean:
+  spa_solar_mode:
+    name: Spa solar heating       # master switch: every rule except filtration does nothing while off
+
+input_number:
+  spa_target_temp:
+    name: Spa target temperature  # THE spa setpoint; spa_target_sync pushes changes to the spa
+    min: 20
+    max: 40
+    step: 1
+    unit_of_measurement: "°C"
+  spa_floor_temp:
+    name: Spa comfort floor       # 15:30 top-up target; keep it below the target
+    min: 20
+    max: 40
+    step: 1
+    unit_of_measurement: "°C"
+  spa_start_surplus:
+    name: Spa start surplus       # tune: heat when the 5-min spare power is above this (heater ~2 kW)
+    min: 500
+    max: 6000
+    step: 100
+    unit_of_measurement: W
+  spa_stop_deficit:
+    name: Spa stop deficit        # tune: stop when the 5-min spare power is below MINUS this
+    min: 0
+    max: 3000
+    step: 100
+    unit_of_measurement: W
+  spa_battery_soc_min:
+    name: Spa battery first until # battery charging only counts as spare above this charge
+    min: 50
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+
+input_datetime:
+  spa_filter_start:
+    name: Spa filter start        # filtration window; replaces the Bestway app's own timer
+    has_date: false
+    has_time: true
+  spa_filter_end:
+    name: Spa filter end
+    has_date: false
+    has_time: true
+
+template:
+  - sensor:
+      # Spare power for the spa, W: + spare / - deficit.
+      #   spare = export
+      #         + battery charging, but only once the battery is at spa_battery_soc_min (battery first)
+      #         - battery discharging (always a deficit: the spa must never drain the battery)
+      # Grid-charging the battery nets out as a deficit, so it can't masquerade as solar.
+      - name: spa_solar_surplus
+        unique_id: spa_solar_surplus
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >
+          {{ states('__GRID_POWER__') | is_number
+             and states('__BATTERY_POWER__') | is_number
+             and states('__BATTERY_SOC__') | is_number }}
+        state: >
+          {% set k = 1000 %}  {# tune: 1000 if your power sensors report kW, 1 if they report W #}
+          {% set grid = states('__GRID_POWER__') | float * k %}
+          {% set batt = states('__BATTERY_POWER__') | float * k %}
+          {% set charging = [0 - batt, 0] | max %}
+          {% set discharging = [batt, 0] | max %}
+          {% set full_enough = states('__BATTERY_SOC__') | float
+                               >= states('input_number.spa_battery_soc_min') | float(95) %}
+          {{ (0 - grid + (charging if full_enough else 0) - discharging) | round(0) }}
+
+  - binary_sensor:
+      - name: spa_grid_price_negative
+        unique_id: spa_grid_price_negative
+        state: "{{ states('__AMBER_GENERAL__') | float(0) < 0 }}"
+      # HA's Amber integration flips the feed-in sign, so < 0 means exporting COSTS you money.
+      - name: spa_feed_in_negative
+        unique_id: spa_feed_in_negative
+        state: "{{ states('__AMBER_FEED_IN__') | float(0) < 0 }}"
+
+sensor:
+  - platform: statistics
+    name: spa_solar_surplus_5m_avg
+    unique_id: spa_solar_surplus_5m_avg
+    entity_id: sensor.spa_solar_surplus
+    state_characteristic: mean
+    max_age:
+      minutes: 5
+    keep_last_sample: true

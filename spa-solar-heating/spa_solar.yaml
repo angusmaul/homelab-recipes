@@ -1,0 +1,290 @@
+# Heat a Bestway spa on spare solar, with a home battery (Tesla Powerwall) that gets first call.
+# Home Assistant automations + one script. Pushed to HA by spa_solar_deploy.py, which substitutes:
+#
+#   __SPA_CLIMATE__     the ha-bestway climate entity                 e.g. climate.airjet_spa_thermostat
+#   __SPA_FILTER__      the ha-bestway filter pump switch             e.g. switch.airjet_spa_filter
+#   __BATTERY_SOC__     battery state of charge, %                    e.g. sensor.<site>_percentage_charged
+#   __NOTIFY_ENTITY__   a notify entity for the offline alert         e.g. notify.<your_ntfy_topic>
+#
+# Needs the helpers in helpers.yaml (or the same IDs created in the UI) BEFORE deploying.
+#
+# ⚠️ There is NO heater switch on the AirJet V02 (AWS IoT backend). The heater IS the climate
+# entity's hvac_mode: `heat` = heater enabled, `off` = disabled; hvac_action says heating vs idle.
+# So "heater on" below means climate state `heat`, switched with climate.set_hvac_mode.
+#
+# Tunables live in helpers, not here: target 33 °C, floor 31 °C, start 2400 W, stop 300 W, battery 95 %.
+
+automations:
+  - id: spa_solar_heat_on
+    alias: "Spa: heat on spare solar"
+    description: >-
+      Turns the spa heater on when (a) the 5-min Powerwall-aware surplus is above
+      input_number.spa_start_surplus, or (b) the Amber GENERAL price is negative (paid to import:
+      heat regardless), or (c) feed-in is negative, the Powerwall is at/above
+      spa_battery_soc_min, the sun is up and we're not in deficit (solar is probably being
+      curtailed, so the real surplus is invisible). Min 10 min off-time protects the relay.
+      Re-checks every 5 min so an already-high surplus is caught without a fresh crossing.
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.spa_solar_surplus_5m_avg
+        above: input_number.spa_start_surplus
+      - trigger: state
+        entity_id: binary_sensor.spa_grid_price_negative
+        to: "on"
+      - trigger: state
+        entity_id: binary_sensor.spa_feed_in_negative
+        to: "on"
+      - trigger: state
+        entity_id: input_boolean.spa_solar_mode
+        to: "on"
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.spa_solar_mode
+        state: "on"
+      - condition: state
+        entity_id: __SPA_CLIMATE__
+        state: "off"
+        for:
+          minutes: 10
+      - condition: template   # unavailable climate -> 99 -> never heats blind
+        value_template: >
+          {{ state_attr('__SPA_CLIMATE__', 'current_temperature') | float(99)
+             < states('input_number.spa_target_temp') | float(38) }}
+      - condition: or
+        conditions:
+          - condition: numeric_state
+            entity_id: sensor.spa_solar_surplus_5m_avg
+            above: input_number.spa_start_surplus
+          - condition: state
+            entity_id: binary_sensor.spa_grid_price_negative
+            state: "on"
+          - condition: and
+            conditions:
+              - condition: state
+                entity_id: binary_sensor.spa_feed_in_negative
+                state: "on"
+              - condition: state
+                entity_id: sun.sun
+                state: above_horizon
+              - condition: template
+                value_template: >
+                  {{ states('__BATTERY_SOC__') | float(0)
+                     >= states('input_number.spa_battery_soc_min') | float(95)
+                     and states('sensor.spa_solar_surplus_5m_avg') | float(-99999)
+                     > -(states('input_number.spa_stop_deficit') | float(300)) }}
+    actions:
+      - if:   # only write the setpoint when it differs — fewer cloud writes
+          - condition: template
+            value_template: >
+              {{ state_attr('__SPA_CLIMATE__', 'temperature') | float(0)
+                 != states('input_number.spa_target_temp') | float(38) }}
+        then:
+          - action: climate.set_temperature
+            target:
+              entity_id: __SPA_CLIMATE__
+            data:
+              temperature: "{{ states('input_number.spa_target_temp') | float }}"
+      - action: climate.set_hvac_mode
+        target:
+          entity_id: __SPA_CLIMATE__
+        data:
+          hvac_mode: heat
+
+  - id: spa_solar_heat_off
+    alias: "Spa: heat off on deficit"
+    description: >-
+      Turns the heater off when the 5-min surplus falls below MINUS input_number.spa_stop_deficit
+      (grid import OR Powerwall discharge — the spa must never drain the battery), or when the
+      surplus sensor has been unavailable 15 min (Tessie/cloud down: fail safe = off). Never while
+      the Amber general price is negative, never during a comfort-floor boost, and only after the
+      heater has run 20 min (relay protection; an HA restart resets last_changed, which can only
+      LENGTHEN a run, never shorten it). Re-checks every 5 min.
+    mode: single
+    triggers:
+      - trigger: template
+        value_template: >
+          {{ states('sensor.spa_solar_surplus_5m_avg') | float(0)
+             < -(states('input_number.spa_stop_deficit') | float(300)) }}
+      - trigger: state
+        entity_id: sensor.spa_solar_surplus_5m_avg
+        to: ["unavailable", "unknown"]
+        for:
+          minutes: 15
+      - trigger: time_pattern
+        minutes: "/5"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.spa_solar_mode
+        state: "on"
+      - condition: state
+        entity_id: __SPA_CLIMATE__
+        state: "heat"
+        for:
+          minutes: 20
+      - condition: not
+        conditions:
+          - condition: state
+            entity_id: binary_sensor.spa_grid_price_negative
+            state: "on"
+      - condition: state
+        entity_id: script.spa_floor_boost
+        state: "off"
+      - condition: template
+        value_template: >
+          {% set s = states('sensor.spa_solar_surplus_5m_avg') %}
+          {% set src = states.sensor.spa_solar_surplus_5m_avg %}
+          {{ (s | is_number and s | float < -(states('input_number.spa_stop_deficit') | float(300)))
+             or (not s | is_number and src is not none
+                 and (now() - src.last_changed).total_seconds() > 900) }}
+    actions:
+      - action: climate.set_hvac_mode
+        target:
+          entity_id: __SPA_CLIMATE__
+        data:
+          hvac_mode: "off"
+
+  - id: spa_comfort_floor
+    alias: "Spa: 15:30 comfort floor"
+    description: >-
+      At 15:30, if the water is below input_number.spa_floor_temp, heat to the floor from whatever
+      source (grid or battery) — max 3 h, then hand back to the solar logic.
+    mode: single
+    triggers:
+      - trigger: time
+        at: "15:30:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.spa_solar_mode
+        state: "on"
+      - condition: template
+        value_template: >
+          {{ state_attr('__SPA_CLIMATE__', 'current_temperature') | float(99)
+             < states('input_number.spa_floor_temp') | float(35) }}
+    actions:
+      - action: script.spa_floor_boost
+
+  - id: spa_target_sync
+    alias: "Spa: push target temp to the spa"
+    description: >-
+      input_number.spa_target_temp is THE target: changing it in HA writes it to the
+      spa straight away, so HA and the Bestway app never disagree. Skipped during a floor boost (the
+      script restores the target itself when it finishes).
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: input_number.spa_target_temp
+    conditions:
+      - condition: state
+        entity_id: script.spa_floor_boost
+        state: "off"
+      - condition: template
+        value_template: >
+          {{ state_attr('__SPA_CLIMATE__', 'temperature') | float(0)
+             != states('input_number.spa_target_temp') | float(0) }}
+    actions:
+      - delay: "00:00:05"   # let a run of +/- taps settle into one cloud write
+      - action: climate.set_temperature
+        target:
+          entity_id: __SPA_CLIMATE__
+        data:
+          temperature: "{{ states('input_number.spa_target_temp') | float }}"
+
+  - id: spa_filter_schedule
+    alias: "Spa: filter pump schedule"
+    description: >-
+      Daily filtration, moved out of the Bestway app's timer because the app's 16:00
+      pump-off also killed any heating. Pump ON inside input_datetime.spa_filter_start..end; OFF outside
+      it, but NEVER while the thermostat is in heat mode -- the heater can't run without the pump
+      (heat-on from HA starts the pump itself, tested). Re-evaluates at both times, 1 min after heat
+      turns off (so a run that ends after the window stops the pump), and on HA start. Independent of
+      spa_solar_mode: filtration is hygiene, not solar.
+    mode: queued
+    triggers:
+      - trigger: time
+        at: input_datetime.spa_filter_start
+      - trigger: time
+        at: input_datetime.spa_filter_end
+      - trigger: state
+        entity_id: __SPA_CLIMATE__
+        to: "off"
+        for:
+          minutes: 1
+      - trigger: homeassistant
+        event: start
+    actions:
+      - variables:
+          in_window: >
+            {% set t = now().strftime('%H:%M:%S') %}
+            {% set s = states('input_datetime.spa_filter_start') %}
+            {% set e = states('input_datetime.spa_filter_end') %}
+            {{ (s <= t < e) if s < e else (t >= s or t < e) }}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ in_window and is_state('__SPA_FILTER__', 'off') }}"
+            sequence:
+              - action: switch.turn_on
+                target:
+                  entity_id: __SPA_FILTER__
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{ not in_window and is_state('__SPA_FILTER__', 'on')
+                     and is_state('__SPA_CLIMATE__', 'off') }}
+            sequence:
+              - action: switch.turn_off
+                target:
+                  entity_id: __SPA_FILTER__
+
+  - id: spa_bestway_unavailable
+    alias: "Spa: Bestway integration unavailable"
+    description: >-
+      ha-bestway is cloud-only; if the spa entity is unavailable for 30 min the solar logic is
+      blind and the spa goes cold silently. Push a notification.
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: __SPA_CLIMATE__
+        to: "unavailable"
+        for:
+          minutes: 30
+    actions:
+      # The original used ntfy.publish on an ntfy notify entity. notify.send_message works with any
+      # entity-based notifier (ntfy included); swap in your own service if you use a legacy one.
+      - action: notify.send_message
+        target:
+          entity_id: __NOTIFY_ENTITY__
+        data:
+          title: "Spa control offline"
+          message: >-
+            The Bestway spa has been unavailable in Home Assistant for 30 min. Solar heating is
+            blind until it comes back — check the Bestway Connect app / Bestway cloud.
+
+scripts:
+  spa_floor_boost:
+    alias: "Spa: floor boost"
+    description: Heat to the comfort floor, max 3 h, then restore the solar target.
+    mode: single
+    sequence:
+      - action: climate.set_temperature
+        target:
+          entity_id: __SPA_CLIMATE__
+        data:
+          temperature: "{{ states('input_number.spa_floor_temp') | float }}"
+      - action: climate.set_hvac_mode
+        target:
+          entity_id: __SPA_CLIMATE__
+        data:
+          hvac_mode: heat
+      - wait_template: >
+          {{ state_attr('__SPA_CLIMATE__', 'current_temperature') | float(0)
+             >= states('input_number.spa_floor_temp') | float(35) }}
+        timeout: "03:00:00"
+      - action: climate.set_temperature
+        target:
+          entity_id: __SPA_CLIMATE__
+        data:
+          temperature: "{{ states('input_number.spa_target_temp') | float }}"
