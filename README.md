@@ -1,7 +1,5 @@
 # homelab-recipes
 
-![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/angusmaul/homelab-recipes?utm_source=oss&utm_medium=github&utm_campaign=angusmaul%2Fhomelab-recipes&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
-
 Reusable pieces from my home automation and homelab builds, most of them written up on
 [Medium](https://geekconsulting.medium.com/). One folder per project. Every folder has a README
 that says what it does, what to substitute, the assumptions that will bite you, how to check it
@@ -20,7 +18,8 @@ trusting a success response.
 
 Placeholders look like `__UPPER_SNAKE__`; `grep -o "__[A-Z_]*__"` finds any left.
 
-Every pull request gets an automated CodeRabbit review focused on privacy and secrets (see
-[.coderabbit.yaml](.coderabbit.yaml)), on top of GitHub's secret scanning and push protection.
+Every pull request gets an automated Claude review focused on privacy and secrets (see
+[claude-review.yml](.github/workflows/claude-review.yml)) and a gitleaks scan, on top of GitHub's
+secret scanning and push protection.
 
 MIT licensed. No warranty: these run real equipment, so read the README before you run anything.
