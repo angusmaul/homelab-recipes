@@ -1,0 +1,78 @@
+name: Claude privacy and code review
+
+# A second reviewer next to CodeRabbit, with no hourly cap. It runs on the Claude subscription via
+# CLAUDE_CODE_OAUTH_TOKEN, so every run draws on the same allowance as interactive Claude Code.
+#
+# Like CodeRabbit, this is a second layer and not the gate: a pushed branch in a public repo is
+# already public, so the scrub happens before the push.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+# A new push supersedes the review of the previous one, so only the latest head is reviewed.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Drafts are skipped to save allowance. Fork PRs get no secrets, so skip them cleanly.
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Review this pull request. Read the diff with `gh pr diff` and the files it touches.
+
+            1. PRIVACY AND SECRETS REVIEW (the main job). This content is scrubbed from a private
+               home automation setup before publishing. Flag, as a blocking issue, anything that
+               identifies the home, its network or its owner, or that grants access:
+               - Credentials of any kind: tokens, API keys, passwords, bearer headers, share or
+                 pairing codes, QR payloads, long random-looking strings.
+               - Private network details: private IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x), ports
+                 tied to a specific host, MAC addresses, .local hostnames, WiFi SSIDs, personal
+                 domain names or subdomains, Nabu Casa remote URLs.
+               - Personal identifiers: email addresses, people's names, account or config-entry
+                 IDs, electricity meter numbers (NMI), vehicle or site names chosen by the owner.
+               - Home Assistant entity IDs that embed a personal site, device or person name. Stock
+                 integration-generated names are fine; owner-chosen names should be
+                 __UPPER_SNAKE__ placeholders.
+               Placeholders look like __UPPER_SNAKE__ and are expected. Example values in README
+               tables (e.g. sensor.<site>_grid_power, person.alex) are fine.
+
+            2. YAML files are Home Assistant YAML meant to be copied by strangers and their AI
+               agents. Check: any __PLACEHOLDER__ used in the file is listed in the folder README's
+               substitution table; templates guard against unavailable states (float defaults,
+               is_number); nothing sets `initial:` on helpers whose values should survive a
+               restart; and nothing can over-dispense, over-heat or loop.
+
+            3. Python scripts talk to a user's Home Assistant. Tokens and URLs must come from
+               environment variables with no default address; the script must never print a
+               token; writes must be dry-run by default.
+
+            4. READMEs: check the claims match the files next to them (placeholders, file names,
+               what's proven vs not). Flag any claim of "tested" or "proven" the README doesn't
+               back up.
+
+            Report each finding as an inline comment on the line it concerns. Then post one
+            top-level comment with `gh pr comment` that starts with either "BLOCKING" or
+            "NO BLOCKING ISSUES" and lists the findings in one line each. If you quote a suspected
+            secret, show only its first four characters. Do not comment on style.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
