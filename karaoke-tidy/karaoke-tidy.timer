@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly karaoke tidy (04:00, after the evening's singing)
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

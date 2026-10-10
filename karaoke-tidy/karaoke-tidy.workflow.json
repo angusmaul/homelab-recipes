@@ -1,0 +1,381 @@
+{
+  "name": "Karaoke tidy: file phone-added songs (two-model agreement)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "karaoke-tidy",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a1f0c6c2-3b0e-4f52-9a61-0c9d7e2b1a01",
+      "name": "From the PiKaraoke host",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per song sent by the PiKaraoke host's karaoke-tidy.py, each carrying the two Ollama requests.\n// The prompt and schema are the ones evaluated in an 80-title labelled test:\n// gpt-oss:20b and qwen3:30b-a3b are biased in OPPOSITE directions on Mandopop vs Cantopop, so\n// acting only when they AGREE gave 55/55 right, 0 wrong moves. Self-reported confidence is useless\n// as a gate (every wrong answer said 0.95), so it is recorded but never trusted.\nconst SYSTEM = `You file karaoke videos for a household karaoke library. Given the title of a YouTube karaoke\nvideo, decide which folder it belongs in, by the LANGUAGE THE SONG IS SUNG IN:\n  K-pop     Korean-language songs\n  Mandopop  Mandarin Chinese songs (mainland China, Taiwan, Singapore, Malaysia)\n  Cantopop  Cantonese songs (mostly Hong Kong)\n  English   English-language songs\n  Other     anything else, or if you cannot tell\nUse your knowledge of the artist and the song. Script is NOT decisive: Traditional Chinese characters\nare used for both Taiwanese Mandarin songs and Cantonese songs, and K-pop is often written in English.\nIgnore uploader clutter such as \"(Karaoke Version)\", \"With Lyrics\", \"Original Key\", \"[TJ노래방]\",\n\"Instrumental\", \"Official\", \"MV\", channel names and emoji.\nReturn the artist and the song title in their native script (Chinese in SIMPLIFIED characters),\nthe artist's OFFICIAL English or romanised name ONLY if they are known by one (for example Jay Chou,\nG.E.M., IU, Eason Chan); otherwise return an EMPTY artist_en, never a translation or an invented name,\nthe song's English title or romanisation (pinyin\nfor Chinese), and your confidence from 0 to 1. Return a low confidence rather than guess.`;\nconst SCHEMA = {\n  type: 'object',\n  properties: {\n    genre: { type: 'string', enum: ['K-pop', 'Mandopop', 'Cantopop', 'English', 'Other'] },\n    artist_native: { type: 'string' }, artist_en: { type: 'string' },\n    title_native: { type: 'string' }, title_en: { type: 'string' },\n    confidence: { type: 'number' },\n  },\n  required: ['genre', 'artist_native', 'artist_en', 'title_native', 'title_en', 'confidence'],\n};\nconst body = (model, title, extra) => ({\n  model, stream: false, format: SCHEMA,\n  options: { temperature: 0, num_ctx: 4096 },\n  messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: title }],\n  ...extra,\n});\nconst songs = ($input.first().json.body || {}).songs || [];\nreturn songs.map(s => ({ json: {\n  file: s.file, title: s.title,\n  body_a: body('gpt-oss:20b', s.title, {}),\n  body_b: body('qwen3:30b-a3b', s.title, { think: false }),\n}}));"
+      },
+      "id": "a1f0c6c2-3b0e-4f52-9a61-0c9d7e2b1a02",
+      "name": "One item per song",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "__OLLAMA_URL__/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body_a) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "a1f0c6c2-3b0e-4f52-9a61-0c9d7e2b1a03",
+      "name": "Ask gpt-oss:20b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Keep the song and model A's answer; a malformed answer becomes null (=> left for review).\nconst song = $('One item per song').item.json;\nlet a = null;\ntry { a = JSON.parse($json.message.content); } catch (e) { a = null; }\nreturn { json: { ...song, a } };"
+      },
+      "id": "a1f0c6c2-3b0e-4f52-9a61-0c9d7e2b1a04",
+      "name": "Keep answer A",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "__OLLAMA_URL__/api/chat",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body_b) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "a1f0c6c2-3b0e-4f52-9a61-0c9d7e2b1a05",
+      "name": "Ask qwen3:30b-a3b",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Decide the folder and build the house-format name. the PiKaraoke host validates everything again before moving.\n//   both agree on a genre              -> that genre's folder\n//   both say Chinese, but disagree     -> Mandopop/ here, then settled by Jev downstream (split: true).\n//                                          (Was Chinese/ for one night;\n//                                          all 5 splits that night were Mandarin, and qwen3:30b leans Cantopop)\n//   anything else, or a malformed reply -> stays in the root, listed for review\nconst prev = $('Keep answer A').item.json;\nlet b = null;\ntry { b = JSON.parse($json.message.content); } catch (e) { b = null; }\nconst a = prev.a;\nconst ga = a && a.genre, gb = b && b.genre;\nconst CHINESE = ['Mandopop', 'Cantopop'];\nlet folder = null, reason, split = false;\nif (!a || !b) reason = 'a model reply was malformed';\nelse if (ga === gb && ga !== 'Other') { folder = ga; reason = `both models: ${ga}`; }\nelse if (CHINESE.includes(ga) && CHINESE.includes(gb)) { folder = 'Mandopop'; split = true; reason = `Chinese split ${ga} vs ${gb}: Mandopop by default`; }\nelse if (ga === gb) reason = `both models: ${ga} (cannot tell)`;\nelse reason = `models disagree: ${ga} vs ${gb}`;\n\n// Names: qwen3:30b-a3b's extraction (43/44 exact in the evaluation), gpt-oss's as fallback.\nconst src = (b && b.title_native) ? b : a;\nconst clean = s => (s || '').replace(/[\\\\/:*?\"<>|]/g, '-').replace(/\\s+/g, ' ').trim();\nconst hasNative = s => /[ㄱ-ㆎ가-힣一-鿿]/.test(s || '');\nlet name = null;\nif (folder && src) {\n  const ae = clean(src.artist_en), an = clean(src.artist_native);\n  const tn = clean(src.title_native), te = clean(src.title_en);\n  const artist = (ae && an && ae.toLowerCase() !== an.toLowerCase()) ? `${ae} ${an}` : (ae || an);\n  let title;\n  if (folder === 'English') title = te || tn;\n  else title = (tn && te && hasNative(tn) && te.toLowerCase() !== tn.toLowerCase()) ? `${tn} (${te})` : (tn || te);\n  if (artist && title) name = `${artist} - ${title}`.slice(0, 140);\n}\nif (folder && !name) { folder = null; split = false; reason += '; no usable name'; }\nreturn { json: {\n  file: prev.file, title: prev.title, folder, name, reason, split,\n  genre_a: ga || null, genre_b: gb || null,\n  confidence_a: a ? a.confidence : null, confidence_b: b ? b.confidence : null,\n  // Raw fields: the PiKaraoke host rebuilds CHINESE names itself (OpenCC t2s + pypinyin), because the models keep\n  // Traditional script and translate titles ('Fuji Mountain Below') instead of giving pinyin.\n  artist_en: src ? clean(src.artist_en) : null, artist_native: src ? clean(src.artist_native) : null,\n  title_native: src ? clean(src.title_native) : null, title_en: src ? clean(src.title_en) : null,\n}};"
+      },
+      "id": "a1f0c6c2-3b0e-4f52-9a61-0c9d7e2b1a06",
+      "name": "Decide folder + name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "a1f0c6c2-3b0e-4f52-9a61-0c9d7e2b1a07",
+      "name": "Reply to the PiKaraoke host",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.split }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "64660238-9abb-4bbe-bbb3-405c78045bd7",
+      "name": "Chinese split?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Only Mandarin-vs-Cantonese splits reach here. One yes/no question; the video title is the state.\n// Evaluated on 80 labelled titles: this question separated the 20 splits 19/20\n// (Mandarin <= 0.41, Cantonese >= 0.67 bar one title), against 10/20 for the Mandopop default.\nreturn { json: {\n  state: $json.title,\n  model: 'jev-latest',\n  questions: {\n    cantonese: { type: 'noul', instructions: 'This is the title of a YouTube karaoke video. Is this song sung in Cantonese (rather than Mandarin or any other language)?' }\n  }\n} };"
+      },
+      "id": "700ef87c-e148-49b6-993a-bf730b8ef02d",
+      "name": "Build Jev Question",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "each",
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "__JEV_SUBWORKFLOW_ID__",
+          "cachedResultName": "Jev decision"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "state": "={{ $json.state }}",
+            "questions": "={{ $json.questions }}",
+            "model": "={{ $json.model }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "state",
+              "displayName": "state",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "questions",
+              "displayName": "questions",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "object"
+            },
+            {
+              "id": "model",
+              "displayName": "model",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "f29499a2-37f0-4ef1-a590-9872903a6704",
+      "name": "Ask Jev: Cantonese?",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1760,
+        180
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pair each Jev reply with its song by position (one reply per split song, in order).\n// Fail open: no usable answer leaves the song on the Mandopop default.\nconst THRESHOLD = 0.5;\nconst songs = $('Chinese split?').all();\nconst replies = $input.all();\nreturn songs.map((s, i) => {\n  const d = { ...s.json };\n  const r = (replies[i] && replies[i].json) || {};\n  const p = r.answers && r.answers.cantonese ? Number(r.answers.cantonese.noul) : NaN;\n  if (replies.length === songs.length && Number.isFinite(p)) {\n    d.folder = p >= THRESHOLD ? 'Cantopop' : 'Mandopop';\n    d.jev_cantonese = p;\n    d.reason = `Chinese split ${d.genre_a} vs ${d.genre_b}: Jev says Cantonese p=${p.toFixed(2)} -> ${d.folder}`;\n  } else {\n    d.jev_cantonese = null;\n    d.reason += '; Jev gave no answer';\n  }\n  return { json: d };\n});"
+      },
+      "id": "eca314fa-b3b0-4d02-80c4-6659f7fdaeaa",
+      "name": "Apply Jev Answer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append"
+      },
+      "id": "55e76429-d535-4725-af42-54c87b031370",
+      "name": "All Decisions",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2200,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "From the PiKaraoke host": {
+      "main": [
+        [
+          {
+            "node": "One item per song",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per song": {
+      "main": [
+        [
+          {
+            "node": "Ask gpt-oss:20b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask gpt-oss:20b": {
+      "main": [
+        [
+          {
+            "node": "Keep answer A",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep answer A": {
+      "main": [
+        [
+          {
+            "node": "Ask qwen3:30b-a3b",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask qwen3:30b-a3b": {
+      "main": [
+        [
+          {
+            "node": "Decide folder + name",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide folder + name": {
+      "main": [
+        [
+          {
+            "node": "Chinese split?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chinese split?": {
+      "main": [
+        [
+          {
+            "node": "Build Jev Question",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "All Decisions",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Build Jev Question": {
+      "main": [
+        [
+          {
+            "node": "Ask Jev: Cantonese?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Jev: Cantonese?": {
+      "main": [
+        [
+          {
+            "node": "Apply Jev Answer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Jev Answer": {
+      "main": [
+        [
+          {
+            "node": "All Decisions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Decisions": {
+      "main": [
+        [
+          {
+            "node": "Reply to the PiKaraoke host",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
