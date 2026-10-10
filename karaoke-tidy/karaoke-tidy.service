@@ -11,6 +11,7 @@ Type=oneshot
 # Run the script by hand WITHOUT --execute first and read its plan.
 Environment=KARAOKE_TIDY_WEBHOOK=__N8N_WEBHOOK_URL__
 Environment=KARAOKE_LIBRARY=__LIBRARY_PATH__
+Environment=PIKARAOKE_URL=__PIKARAOKE_URL__
 Environment=LANG=C.UTF-8 LC_ALL=C.UTF-8
 ExecStart=/usr/bin/python3 /usr/local/bin/karaoke-tidy.py --execute
 TimeoutStartSec=1800

@@ -39,7 +39,7 @@ import urllib.request
 LIB = os.environ.get('KARAOKE_LIBRARY', '').rstrip('/')    # no default: PiKaraoke's download path
 LOG = os.path.join(LIB, '.logs', 'tidy.log')
 WEBHOOK = os.environ.get('KARAOKE_TIDY_WEBHOOK')      # no default: e.g. https://<your n8n>/webhook/karaoke-tidy
-PIKA = os.environ.get('PIKARAOKE_URL', 'http://127.0.0.1:5555')   # loopback on the PiKaraoke host
+PIKA = (os.environ.get('PIKARAOKE_URL') or '').rstrip('/')   # no default: e.g. http://127.0.0.1:5555 on the PiKaraoke host
 FOLDERS = {'K-pop', 'Mandopop', 'Cantopop', 'English', 'Chinese'}
 MEDIA = {'.mp4', '.webm', '.mkv', '.mp3', '.zip', '.m4a'}
 COMPANIONS = ('.ass', '.cdg', '.ASS', '.CDG')
@@ -165,8 +165,8 @@ def main():
                     help='re-run these library files (paths relative to the library, e.g. "Chinese/x---id.mp4") '
                          'through the same classify + name pipeline, instead of scanning the root')
     args = ap.parse_args()
-    if not WEBHOOK or not LIB:
-        raise SystemExit('set KARAOKE_TIDY_WEBHOOK and KARAOKE_LIBRARY first; there are no defaults')
+    if not WEBHOOK or not LIB or not PIKA:
+        raise SystemExit('set KARAOKE_TIDY_WEBHOOK, KARAOKE_LIBRARY and PIKARAOKE_URL first; there are no defaults')
     mode = 'EXECUTE' if args.execute else 'DRY RUN'
     stamp = datetime.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
     out = [f'=== {stamp}  karaoke-tidy  {mode}']

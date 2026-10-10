@@ -7,7 +7,8 @@ answer. Everything else stays where it is, listed for a person. Article link to 
 
 ## Status
 
-As of 2026-10-10. **Proven live:** twelve nightly runs on a library of about 800 songs in Korean,
+As of 2026-10-10. Everything in this section is from the author's own install and cannot be
+reproduced from the files here; only the 80-title test in `eval/` can. **Run there:** twelve nightly runs on a library of about 800 songs in Korean,
 Mandarin, Cantonese and English; 40 songs filed; the agreement rule; Chinese name building; the log;
 the fail-safe when the workflow is unreachable.
 **Known wrong:** the artist/title split has no second check. One song was filed with the song title
@@ -20,8 +21,8 @@ appears to be in Mandarin, were filed as Cantopop with both models agreeing.
 - `karaoke-tidy.workflow.json`: the n8n workflow. Webhook in, two Ollama calls per title, one
   decision step, JSON out. Exported from the running workflow with ids and addresses removed.
 - `karaoke-tidy.py`: runs on the PiKaraoke host. Lists root songs, calls the webhook, re-validates
-  every decision, moves the files, restarts PiKaraoke, writes the log. Copied from the deployed
-  script; the three addresses became environment variables. Dry run unless `--execute`.
+  every decision, moves the files, restarts PiKaraoke, writes the log. Derived from the script on the author's
+  install; the three addresses became environment variables. Dry run unless `--execute`.
 - `karaoke-tidy.service`, `karaoke-tidy.timer`: systemd units for 04:00.
 - `eval/`: the raw model answers on 80 labelled titles, and `score.py` to recompute the figures.
 
@@ -42,10 +43,10 @@ appears to be in Mandarin, were filed as Cantopop with both models agreeing.
 | `__OLLAMA_URL__` | workflow, twice | base address of Ollama | `http://ollama.example:11434` |
 | `__N8N_WEBHOOK_URL__` | service | the workflow's production webhook | `https://n8n.example/webhook/karaoke-tidy` |
 | `__LIBRARY_PATH__` | service, twice | PiKaraoke's download path | `/media/karaoke` |
+| `__PIKARAOKE_URL__` | service | PiKaraoke's own address, as seen from the script | `http://127.0.0.1:5555` |
 
 `grep -o "__[A-Z_]*__" *` lists every one left. The script reads `KARAOKE_TIDY_WEBHOOK`,
-`KARAOKE_LIBRARY` from the environment and refuses to run without them. `PIKARAOKE_URL` is
-optional and defaults to `http://127.0.0.1:5555`, PiKaraoke's default port on the same host.
+`KARAOKE_LIBRARY` and `PIKARAOKE_URL` from the environment and refuses to run without all three.
 
 ## Mandarin or Cantonese splits
 
@@ -58,7 +59,7 @@ song as Cantopop at 0.5 or above, Mandopop below. `eval/` has those answers too.
 something like it, send it only the split titles and keep "no answer" meaning "leave for review".
 
 So the shipped workflow differs from the running one in this one branch, and **that edited branch
-has not been run**. Everything else is as deployed.
+has not been run**. The rest matches what runs on the author's install, which you cannot check from here.
 
 ## The measurements
 
@@ -74,7 +75,9 @@ the same rule has since filed one song in what looks like the wrong language fol
 ## Assumptions that bite
 
 - **Folder names are the labels.** `K-pop`, `Mandopop`, `Cantopop`, `English` appear in the prompt,
-  the schema, the decision step and the script's allow-list. Change all four together.
+  the schema, the decision step and the script's allow-list. Change all four together. The script's
+  allow-list also accepts a `Chinese` folder, left from an earlier version; the workflow never
+  sends it, and you can delete it.
 - **The agreement rule depends on these two models.** It works because their errors point in
   opposite directions. Swap a model and you must re-measure.
 - **Filenames end in the YouTube id** (`---<11 characters>`), as PiKaraoke writes them. Files
@@ -90,7 +93,7 @@ the same rule has since filed one song in what looks like the wrong language fol
 ## Install
 
 1. Import the workflow into n8n, substitute the placeholder, activate it.
-2. Put `karaoke-tidy.py` on the PiKaraoke host. Export the two environment variables and run it
+2. Put `karaoke-tidy.py` on the PiKaraoke host. Export the three environment variables and run it
    with no arguments. Read the plan it prints.
 3. Run it once with `--execute` while nobody is singing.
 4. Install the two units, substitute the placeholders, `systemctl enable --now karaoke-tidy.timer`.
