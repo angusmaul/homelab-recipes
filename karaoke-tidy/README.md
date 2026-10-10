@@ -63,7 +63,8 @@ has not been run**. Everything else is as deployed.
 ## The measurements
 
 `eval/` holds the raw answers behind every figure quoted here, and `python3 eval/score.py`
-recomputes them: 80 labelled titles; each local model alone gets 67 to 72 right; the two used
+recomputes them: 80 labelled titles; each of the two models used here gets 67 right alone (a
+third, smaller model that is not used gets 72); the two used
 here agree on 55 and all 55 are right; they split Mandarin against Cantonese on 20, of which 10
 are labelled each way; the hosted yes/no question matches the label on 19 of those 20.
 
