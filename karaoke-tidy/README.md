@@ -23,6 +23,7 @@ appears to be in Mandarin, were filed as Cantopop with both models agreeing.
   every decision, moves the files, restarts PiKaraoke, writes the log. Copied from the deployed
   script; the three addresses became environment variables. Dry run unless `--execute`.
 - `karaoke-tidy.service`, `karaoke-tidy.timer`: systemd units for 04:00.
+- `eval/`: the raw model answers on 80 labelled titles, and `score.py` to recompute the figures.
 
 ## Requirements
 
@@ -39,34 +40,42 @@ appears to be in Mandarin, were filed as Cantopop with both models agreeing.
 | Placeholder | In | What it is | Example |
 |---|---|---|---|
 | `__OLLAMA_URL__` | workflow, twice | base address of Ollama | `http://ollama.example:11434` |
-| `__JEV_SUBWORKFLOW_ID__` | workflow | see *The split branch* below | |
 | `__N8N_WEBHOOK_URL__` | service | the workflow's production webhook | `https://n8n.example/webhook/karaoke-tidy` |
 | `__LIBRARY_PATH__` | service, twice | PiKaraoke's download path | `/media/karaoke` |
 
 `grep -o "__[A-Z_]*__" *` lists every one left. The script reads `KARAOKE_TIDY_WEBHOOK`,
-`KARAOKE_LIBRARY` and optionally `PIKARAOKE_URL` from the environment and refuses to run without
-the first two.
+`KARAOKE_LIBRARY` from the environment and refuses to run without them. `PIKARAOKE_URL` is
+optional and defaults to `http://127.0.0.1:5555`, PiKaraoke's default port on the same host.
 
-## The split branch
+## Mandarin or Cantonese splits
 
-When both models say "Chinese" but disagree on Mandarin or Cantonese, the workflow files the song
-as Mandopop and then puts one yes/no question ("is this sung in Cantonese?") to a hosted decision
-model through a separate sub-workflow that is **not included here**. Either:
+When both models say "Chinese" but disagree on which, **this workflow leaves the song for review**.
 
-- delete the four nodes after `Chinese split?` and wire `Decide folder + name` straight to
-  `Reply to the PiKaraoke host`; splits then go to Mandopop, which was wrong for 10 of 20 splits in our test; or
-- point `Ask Jev: Cantonese?` at your own sub-workflow that returns
-  `{answers: {cantonese: {noul: <probability 0..1>}}}`.
+The original install does something else there, which is not shipped because it needs an account
+with a hosted service: it asks [Jev](https://typesafe.ai/), a hosted decision model, one yes/no question
+("This is the title of a YouTube karaoke video. Is this song sung in Cantonese?") and files the
+song as Cantopop at 0.5 or above, Mandopop below. `eval/` has those answers too. If you add
+something like it, send it only the split titles and keep "no answer" meaning "leave for review".
 
-In the first case, consider changing the decision step to leave splits for review instead.
+So the shipped workflow differs from the running one in this one branch, and **that edited branch
+has not been run**. Everything else is as deployed.
+
+## The measurements
+
+`eval/` holds the raw answers behind every figure quoted here, and `python3 eval/score.py`
+recomputes them: 80 labelled titles; each local model alone gets 67 to 72 right; the two used
+here agree on 55 and all 55 are right; they split Mandarin against Cantonese on 20, of which 10
+are labelled each way; the hosted yes/no question matches the label on 19 of those 20.
+
+That is a test of 80 titles labelled by their source channel, not a guarantee. On the live library
+the same rule has since filed one song in what looks like the wrong language folder (see Status).
 
 ## Assumptions that bite
 
 - **Folder names are the labels.** `K-pop`, `Mandopop`, `Cantopop`, `English` appear in the prompt,
   the schema, the decision step and the script's allow-list. Change all four together.
 - **The agreement rule depends on these two models.** It works because their errors point in
-  opposite directions. Swap a model and you must re-measure; a higher-scoring model made the vote
-  worse in our test.
+  opposite directions. Swap a model and you must re-measure.
 - **Filenames end in the YouTube id** (`---<11 characters>`), as PiKaraoke writes them. Files
   without it are skipped. The id is kept on rename because play history is keyed on it.
 - **Names follow `<English artist> <native artist> - <native title> (<romanisation>)`.** The
@@ -79,7 +88,7 @@ In the first case, consider changing the decision step to leave splits for revie
 
 ## Install
 
-1. Import the workflow into n8n, substitute the placeholders, deal with the split branch, activate it.
+1. Import the workflow into n8n, substitute the placeholder, activate it.
 2. Put `karaoke-tidy.py` on the PiKaraoke host. Export the two environment variables and run it
    with no arguments. Read the plan it prints.
 3. Run it once with `--execute` while nobody is singing.
@@ -87,7 +96,8 @@ In the first case, consider changing the decision step to leave splits for revie
 
 ## Verify it works
 
-- After a dry run, nothing in the library has changed and `.logs/tidy.log` has a `DRY RUN` entry.
+- After a dry run, no song has moved. The one thing a dry run does write is its own entry in
+  `.logs/tidy.log` inside the library (it creates `.logs/` if needed).
 - After `--execute`, list the genre folder: the file is there under its new name. Search for it in
   PiKaraoke's web page. Check the song count in PiKaraoke before and after: it must not drop.
 - Stop n8n and run it: it must say nothing moved, and exit non-zero.
@@ -97,7 +107,8 @@ In the first case, consider changing the decision step to leave splits for revie
 1. Read PiKaraoke's routes on the installed version before trusting `/get_queue` and
    `/now_playing`; the script refuses to move anything if it cannot read the queue, so keep that.
 2. Dry-run and show the plan before `--execute`. Never add a delete.
-3. Do not gate on the models' `confidence` field. In our test every wrong answer reported 0.95.
+3. Do not gate on the models' `confidence` field. In `eval/`, one model reported 0.95 on all 13 of
+   its wrong answers and on 66 of its 67 right ones.
 4. Before changing a model or adding a language, build a labelled test set and measure agreement
    and wrong moves, not accuracy alone.
 5. Count the library before and after any rename; a success return is not proof.

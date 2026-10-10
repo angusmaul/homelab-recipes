@@ -7,16 +7,16 @@ PiKaraoke saves in-app downloads to the ROOT of the library, named after the raw
   1. lists root songs that are over an hour old and are NOT queued or playing (PiKaraoke's
      /get_queue and /now_playing), so nothing is moved from under a singer;
   2. POSTs their titles to the n8n workflow "Karaoke tidy" (karaoke-tidy.workflow.json),
-     which asks gpt-oss:20b AND qwen3:30b-a3b, and files a song only when they AGREE (55/55 right in
-     our 80-title evaluation). Chinese songs they can't place as Mandopop vs Cantopop go to
-     Mandopop/ and are then settled by one yes/no question in the workflow; anything else stays in the root for review;
+     which asks gpt-oss:20b AND qwen3:30b-a3b, and files a song only when they AGREE (see eval/ for the
+     measurements). Chinese songs they can't place as Mandopop vs Cantopop, and anything else they
+     disagree on, stay in the root for review;
   3. RE-VALIDATES every decision here (folder allow-list, sanitised name, no collision): n8n is
      trusted to classify, never to choose paths;
   4. moves each song with its .ass/.cdg companions, KEEPING the `---<youtube id>` suffix.
      Note: PiKaraoke's scanner detects a move only when the BASENAME is unchanged,
-     and we also rename, so it logs delete + add (first run: added=14, moved=0, deleted=13). Play
+     and we also rename, so it logs delete + add. Play
      history still survives: `plays` keeps youtube_id, which history and rankings are keyed on
-     (verified: 9/9 plays of the moved songs kept it); only plays.song_id goes NULL, as PiKaraoke's
+     (checked on the original install); only plays.song_id goes NULL, as PiKaraoke's
      schema intends when a file is replaced;
   5. restarts PiKaraoke only if something moved, which runs its library sync;
   6. appends every decision to Karaoke/.logs/tidy.log in the library, dry runs included.
@@ -197,7 +197,7 @@ def main():
             continue
         title = base[:m.start()].strip()
         if args.refile:
-            # A refiled song already carries our old English artist name ("Yu Hui Classmate 玉慧同学 - …");
+            # A refiled song already carries our old English artist name ("Old Name 艺人 - …");
             # the models would just echo it back, so ask about the native name only.
             title = re.sub(r'^[^一-鿿가-힣]*(?=[一-鿿가-힣])', '', title)
         songs.append(dict(file=fn, title=title, suffix=m.group(1), ext=ext))
