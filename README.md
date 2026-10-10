@@ -15,7 +15,7 @@ trusting a success response.
 | [spa-solar-heating](spa-solar-heating/) | Heat a Bestway spa in Home Assistant only on spare solar, with a Tesla Powerwall getting first call. [Article](https://geekconsulting.medium.com/a-spring-scorcher-a-powerwall-and-a-spa-that-only-heats-on-spare-sunshine-c2c1dc44efc1) |
 | [tesla-plug-in-alert](tesla-plug-in-alert/) | Push to your phone when charging the car would be free or cheap and it isn't plugged in. [Article](https://geekconsulting.medium.com/the-someday-project-part-iii-the-homelab-paid-for-itself-in-one-push-notification-455558316369) |
 | [petlibro-feeder](petlibro-feeder/) | "Hey Google, feed the cat" for a PetLibro feeder: fails loudly, never over-dispenses, and self-heals the integration after a bad boot |
-| [karaoke-tidy](karaoke-tidy/) | File the songs guests add to a PiKaraoke library from their phones, each night, with n8n and two local Ollama models that have to agree on the language |
+| [karaoke-tidy](karaoke-tidy/) | File the songs guests add to a PiKaraoke library from their phones, each night, with n8n and two local Ollama models that have to agree on the language. [Article](https://geekconsulting.au/writing/karaoke-server-homelab-ai/) |
 
 Placeholders look like `__UPPER_SNAKE__`; `grep -o "__[A-Z_]*__"` finds any left.
 

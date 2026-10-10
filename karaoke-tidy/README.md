@@ -3,7 +3,7 @@
 A nightly job for a [PiKaraoke](https://github.com/vicwomg/pikaraoke) library. Songs that guests
 download from their phones land in the library root under raw YouTube titles. This asks two local
 models which language each is sung in, and renames and files a song only when both give the same
-answer. Everything else stays where it is, listed for a person. Article link to follow.
+answer. Everything else stays where it is, listed for a person. Written up in [A Karaoke Server for My Partner, and Two Local AI Models That Argue About Cantopop at 4 am](https://geekconsulting.au/writing/karaoke-server-homelab-ai/).
 
 ## Status
 
