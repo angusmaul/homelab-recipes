@@ -1,0 +1,96 @@
+# Thingport in a Proxmox LXC. Upstream's docker-compose.deploy.yml with four changes:
+#   * images PINNED by commit. Upstream publishes only :latest and sha-<commit> for the app
+#     images, so :latest moves under you several times a day. Override in .env to bump.
+#   * bind mounts instead of named volumes, so the data sits at paths you can see, back up and
+#     put on a NAS: Postgres in /opt/thingport/data/postgres, model files in /mnt/models.
+#   * the consume folder is mounted (/mnt/consume), so dropping files there imports them.
+#   * no default for AUTH_SECRET or POSTGRES_PASSWORD: compose refuses to start without them
+#     rather than running on a published placeholder.
+# Bump a tag in .env, then: docker compose pull && docker compose up -d
+name: thingport
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-thingport}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      - POSTGRES_DB=${POSTGRES_DB:-thingport}
+    volumes:
+      # Keep Postgres on local disk even when the library is on a network share.
+      - /opt/thingport/data/postgres:/var/lib/postgresql/data
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-thingport}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Bundled so imports from sites behind Cloudflare (MakerWorld) work without another service.
+  flaresolverr:
+    image: ${FLARESOLVERR_IMAGE:-ghcr.io/flaresolverr/flaresolverr:v3.5.2}
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=${FLARESOLVERR_LOG_LEVEL:-info}
+      - TZ=${TZ:-UTC}
+    networks:
+      - app-net
+
+  backend:
+    # The backend and frontend tags are NOT always the same string: CI builds each component only
+    # when it changed, so a backend-only commit publishes no frontend tag. For each image take the
+    # newest tag at or before the commit you want.
+    image: ${BACKEND_IMAGE:-ghcr.io/tautvydasderzinskas/thingport-backend:sha-6993a4c}
+    restart: unless-stopped
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-UTC}
+      - FILE_STORAGE=/app/storage
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-thingport}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-thingport}?schema=public
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - AUTH_SECRET=${AUTH_SECRET:?set AUTH_SECRET in .env}
+      # Seconds. Upstream's default is 12 h; an expired login makes the page spin instead of
+      # showing a login form, which looks like a dead server. Read at container start only, so
+      # apply a change with `docker compose up -d`, not `docker restart`.
+      - AUTH_TOKEN_TTL=${AUTH_TOKEN_TTL:-43200}
+      - PUBLIC_URL=${PUBLIC_URL:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-Thingport <no-reply@localhost>}
+      - FLARESOLVERR_URL=${FLARESOLVERR_URL:-http://flaresolverr:8191/v1}
+      # Per-file size cap for uploads and the consume folder. Larger files are skipped.
+      - IMPORT_MAX_MB=${IMPORT_MAX_MB:-512}
+    depends_on:
+      db:
+        condition: service_healthy
+      flaresolverr:
+        condition: service_started
+    volumes:
+      # Thingport's own library. It lays this out itself; don't put files in here by hand.
+      - /mnt/models:/app/storage
+      # Consume folder: files, folder trees and ZIPs copied here are imported and then REMOVED
+      # from here. Configure it under Administration -> Settings -> Consume Folder.
+      - /mnt/consume:/app/consume
+    networks:
+      - app-net
+
+  # nginx serving the app and proxying /api/* to the backend.
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/tautvydasderzinskas/thingport-frontend:sha-6993a4c}
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-80}:80"
+    depends_on:
+      - backend
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    driver: bridge
